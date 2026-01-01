@@ -21,6 +21,7 @@ import { DEFAULT_VIP_LEVELS, DEFAULT_GIFTS, DEFAULT_STORE_ITEMS } from './consta
 import { Room, User, VIPPackage, UserLevel, Gift, StoreItem, GameSettings, GlobalAnnouncement, LuckyBag } from './types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { db, auth } from './services/firebase';
+import { EconomyEngine } from './services/economy'; 
 import { collection, onSnapshot, doc, setDoc, query, orderBy, addDoc, getDoc, serverTimestamp, deleteDoc, updateDoc, arrayUnion, arrayRemove, increment, limit, where, writeBatch } from 'firebase/firestore';
 import { deleteUser, signOut } from 'firebase/auth';
 
@@ -64,6 +65,23 @@ export default function App() {
   });
 
   const t = translations[language];
+
+  const updateBrowserIcons = (logoUrl: string) => {
+    const link: HTMLLinkElement = document.querySelector("link[rel*='icon']") || document.createElement('link');
+    link.type = 'image/png';
+    link.rel = 'icon';
+    link.href = logoUrl;
+    document.getElementsByTagName('head')[0].appendChild(link);
+
+    const appleLink: HTMLLinkElement = document.querySelector("link[rel='apple-touch-icon']") || document.createElement('link');
+    appleLink.rel = 'apple-touch-icon';
+    appleLink.href = logoUrl;
+    document.getElementsByTagName('head')[0].appendChild(appleLink);
+  };
+
+  useEffect(() => {
+    updateBrowserIcons(appLogo);
+  }, [appLogo]);
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
@@ -137,19 +155,19 @@ export default function App() {
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
         const usersData = snapshot.docs.map(doc => {
           const d = doc.data();
-          const wPts = typeof d.wealth === 'number' ? d.wealth : (d.wealth?.value || 0);
-          const rPts = typeof d.rechargePoints === 'number' ? d.rechargePoints : (d.rechargePoints?.value || 0);
+          const wPts = typeof d.wealth === 'number' ? d.wealth : 0;
+          const rPts = typeof d.rechargePoints === 'number' ? d.rechargePoints : 0;
 
           return { 
             id: doc.id, 
             ...d,
             wealthLevel: calculateLvl(wPts),
             rechargeLevel: calculateLvl(rPts),
-            coins: typeof d.coins === 'number' ? d.coins : (d.coins?.value || 0),
-            diamonds: typeof d.diamonds === 'number' ? d.diamonds : (d.diamonds?.value || 0),
+            coins: Number(d.coins || 0),
+            diamonds: Number(d.diamonds || 0),
             wealth: wPts,
             rechargePoints: rPts,
-            charm: typeof d.charm === 'number' ? d.charm : (d.charm?.value || 0),
+            charm: Number(d.charm || 0),
             ownedItems: Array.isArray(d.ownedItems) ? d.ownedItems : []
           } as User;
         });
@@ -192,7 +210,7 @@ export default function App() {
            setUser({
               ...d,
               id: docSnap.id,
-              coins: typeof d?.coins === 'number' ? d.coins : 0,
+              coins: Number(d?.coins || 0),
               ownedItems: Array.isArray(d?.ownedItems) ? d.ownedItems : []
            } as User);
         }
@@ -208,10 +226,19 @@ export default function App() {
   const handleUpdateUser = async (updatedData: any) => {
     if (!user) return;
     const userId = updatedData.id || user.id;
+    const { id, ...cleanData } = updatedData;
+    
+    // إزالة أي خصائص undefined لمنع أخطاء Firestore
+    const firestoreData = Object.fromEntries(
+      Object.entries(cleanData).filter(([_, v]) => v !== undefined)
+    );
+
+    setUser(prev => prev ? { ...prev, ...firestoreData } : null);
+
     try {
-      await updateDoc(doc(db, 'users', userId), updatedData);
+      await updateDoc(doc(db, 'users', userId), firestoreData);
     } catch (error) {
-      console.error("Database sync failed:", error);
+      console.error("Database background sync failed:", error);
     }
   };
 
@@ -221,51 +248,33 @@ export default function App() {
     return latest || currentRoom;
   }, [currentRoom, roomsWithLatestUserData]);
 
+  // استبدال الألماس بشكل فوري
   const handleExchangeDiamonds = async (diamondsAmount: number) => {
-    if (!user || (user.diamonds || 0) < diamondsAmount) return;
-    const coinsGained = Math.floor(diamondsAmount * 0.5);
-    await handleUpdateUser({
-        diamonds: increment(-diamondsAmount),
-        coins: increment(coinsGained)
+    if (!user) return;
+    EconomyEngine.exchangeDiamonds(user.id, user.coins, user.diamonds, diamondsAmount, (data) => {
+       handleUpdateUser(data);
     });
+    setShowWalletModal(false); // إغلاق النافذة فوراً
   };
 
+  // شحن الوكالة بشكل فوري
   const handleAgencyCharge = async (targetId: string, amount: number) => {
     if (!user || !user.isAgency) return;
-    if ((user.agencyBalance || 0) < amount) return alert('رصيد الوكالة لا يكفي!');
+    if (Number(user.agencyBalance || 0) < amount) return alert('رصيد الوكالة لا يكفي!');
 
-    const originalUser = { ...user };
-    const originalUsers = [...users];
+    const target = users.find(u => u.id === targetId);
+    if (!target) return alert('المستخدم غير موجود!');
 
-    setUser(prev => prev ? { ...prev, agencyBalance: (prev.agencyBalance || 0) - amount } : null);
-    
-    setUsers(prev => prev.map(u => u.id === targetId ? { 
-      ...u, 
-      coins: (u.coins || 0) + amount,
-      rechargePoints: (u.rechargePoints || 0) + amount,
-      rechargeLevel: calculateLvl((u.rechargePoints || 0) + amount)
-    } : u));
-
-    setShowAgencyModal(false);
-    
-    try {
-      const batch = writeBatch(db);
-      const agentRef = doc(db, 'users', user.id);
-      const targetRef = doc(db, 'users', targetId);
-
-      batch.update(agentRef, { agencyBalance: increment(-amount) });
-      batch.update(targetRef, { 
-        coins: increment(amount), 
-        rechargePoints: increment(amount) 
-      });
-
-      await batch.commit();
-    } catch (e) {
-      console.error("Background sync failed:", e);
-      setUser(originalUser);
-      setUsers(originalUsers);
-      alert('فشل الشحن في الخلفية، يرجى التحقق من الاتصال');
-    }
+    EconomyEngine.agencyTransfer(
+      user.id, user.agencyBalance!,
+      targetId, target.coins, target.rechargePoints || 0,
+      amount, 
+      (agentData, targetData) => {
+        setUser(prev => prev ? { ...prev, ...agentData } : null);
+        setUsers(prev => prev.map(u => u.id === targetId ? { ...u, ...targetData } : u));
+      }
+    );
+    setShowAgencyModal(false); // إغلاق النافذة فوراً
   };
 
   const onUpdateAppBanner = async (url: string) => {
@@ -277,6 +286,7 @@ export default function App() {
     setAppLogo(url);
     localStorage.setItem('vivo_live_fixed_logo', url);
     await setDoc(doc(db, 'appSettings', 'global'), { appLogo: url }, { merge: true });
+    updateBrowserIcons(url);
   };
 
   const onUpdateAppName = async (name: string) => {
@@ -296,7 +306,7 @@ export default function App() {
   const handleCreateRoom = async (roomData: any) => {
     if (!user || !user.customId) return;
     const roomId = user.customId.toString();
-    const newRoom = { ...roomData, id: roomId, hostId: user.id, listeners: 1, speakers: [{ id: user.id, name: user.name, avatar: user.avatar, seatIndex: 0, charm: 0 }], createdAt: serverTimestamp() };
+    const newRoom = { ...roomData, id: roomId, hostId: user.id, listeners: 1, speakers: [{ id: user.id, name: user.name, avatar: user.avatar, seatIndex: 0, charm: 0, isMuted: false }], createdAt: serverTimestamp() };
     await setDoc(doc(db, 'rooms', roomId), newRoom);
     setShowCreateRoomModal(false);
   };
@@ -328,12 +338,12 @@ export default function App() {
         const cleanedSpeakers = (currentRoom.speakers || [])
           .filter(s => s.id !== user.id)
           .map(s => ({
-            id: s.id,
-            name: s.name,
-            avatar: s.avatar,
-            seatIndex: s.seatIndex,
-            isMuted: s.isMuted,
-            charm: s.charm || 0
+            id: s.id || '',
+            name: s.name || 'مستخدم',
+            avatar: s.avatar || '',
+            seatIndex: s.seatIndex || 0,
+            isMuted: s.isMuted || false,
+            charm: Number(s.charm || 0)
           })) as any[];
         await updateDoc(doc(db, 'rooms', roomId), { speakers: cleanedSpeakers, listeners: increment(-1) });
       }
@@ -341,11 +351,32 @@ export default function App() {
   };
 
   const handleUpdateRoom = async (roomId: string, data: Partial<Room>) => {
-    const sanitizedData = { ...data };
-    if (sanitizedData.speakers) {
-      sanitizedData.speakers = sanitizedData.speakers.map(s => ({ id: s.id, name: s.name, avatar: s.avatar, seatIndex: s.seatIndex, isMuted: s.isMuted, charm: s.charm || 0 })) as any[];
+    const cleanedData: any = {};
+    
+    // تنظيف الحقول الأساسية
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined) {
+        cleanedData[key] = value;
+      }
+    });
+
+    // تنظيف مصفوفة المتحدثين بشكل خاص لمنع undefined
+    if (cleanedData.speakers) {
+      cleanedData.speakers = cleanedData.speakers.map((s: any) => ({
+        id: s.id || '',
+        name: s.name || 'مستخدم',
+        avatar: s.avatar || '',
+        seatIndex: s.seatIndex ?? 0,
+        isMuted: s.isMuted ?? false,
+        charm: Number(s.charm || 0)
+      })) as any[];
     }
-    await updateDoc(doc(db, 'rooms', roomId), sanitizedData);
+    
+    try {
+      await updateDoc(doc(db, 'rooms', roomId), cleanedData);
+    } catch (e) {
+      console.error("Firestore Update Error:", e);
+    }
   };
 
   if (initializing) return (
@@ -385,7 +416,7 @@ export default function App() {
                  </div>
                  <div className="bg-slate-900/50 p-2 rounded-xl border border-white/5 overflow-x-auto">
                    <div className="flex gap-3 min-w-max">
-                     {[...users].filter(u => (u.wealth || 0) > 0).sort((a, b) => (b.wealth || 0) - (a.wealth || 0)).slice(0, 10).map((contributor, idx) => (
+                     {[...users].filter(u => Number(u.wealth || 0) > 0).sort((a, b) => Number(b.wealth || 0) - Number(a.wealth || 0)).slice(0, 10).map((contributor, idx) => (
                        <div key={contributor.id} className="flex flex-col items-center gap-1 min-w-[60px]">
                           <img src={contributor.avatar} className={`w-12 h-12 rounded-full border-2 ${idx === 0 ? 'border-yellow-500' : 'border-slate-700'}`} />
                           <span className="text-[9px] font-bold text-white max-w-[60px] truncate">{contributor.name}</span>
@@ -500,9 +531,9 @@ export default function App() {
           />
         )}
       </AnimatePresence>
-      {showVIPModal && user && <VIPModal user={user} vipLevels={vipLevels} onClose={() => setShowVIPModal(false)} onBuy={(v) => handleUpdateUser({ isVip: true, vipLevel: v.level, coins: increment(-v.cost), frame: v.frameUrl, nameStyle: v.nameStyle })} />}
+      {showVIPModal && user && <VIPModal user={user} vipLevels={vipLevels} onClose={() => setShowVIPModal(false)} onBuy={(v) => handleUpdateUser({ isVip: true, vipLevel: v.level, coins: Number(user.coins) - v.cost, frame: v.frameUrl, nameStyle: v.nameStyle })} />}
       {showEditProfileModal && user && <EditProfileModal isOpen={showEditProfileModal} onClose={() => setShowEditProfileModal(false)} currentUser={user} onSave={handleUpdateUser} />}
-      {showBagModal && user && <BagModal isOpen={showBagModal} onClose={() => setShowBagModal(false)} items={storeItems} user={user} onBuy={(item) => handleUpdateUser({ coins: increment(-item.price), ownedItems: arrayUnion(item.id) })} onEquip={(item) => handleUpdateUser(item.type === 'frame' ? { frame: item.url } : { activeBubble: item.url })} />}
+      {showBagModal && user && <BagModal isOpen={showBagModal} onClose={() => setShowBagModal(false)} items={storeItems} user={user} onBuy={(item) => EconomyEngine.spendCoins(user.id, user.coins, user.wealth, item.price, (data) => handleUpdateUser({ ...data, ownedItems: arrayUnion(item.id) }))} onEquip={(item) => handleUpdateUser(item.type === 'frame' ? { frame: item.url } : { activeBubble: item.url })} />}
       {showWalletModal && user && <WalletModal isOpen={showWalletModal} onClose={() => setShowWalletModal(false)} user={user} onExchange={handleExchangeDiamonds} />}
       {showAgencyModal && user && <AgencyRechargeModal isOpen={showAgencyModal} onClose={() => setShowAgencyModal(false)} agentUser={user} users={users} onCharge={handleAgencyCharge} />}
       {showCreateRoomModal && <CreateRoomModal isOpen={showCreateRoomModal} onClose={() => setShowCreateRoomModal(false)} onCreate={handleCreateRoom} />}
