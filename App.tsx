@@ -56,14 +56,30 @@ export default function App() {
   const [appName, setAppName] = useState('فيفو لايف - Vivo Live');
   const [privateChatPartner, setPrivateChatPartner] = useState<User | null>(null);
   const [pendingRoom, setPendingRoom] = useState<Room | null>(null);
-  const [roomPassword, setRoomPassword] = useState('');
   
-  // استخدام اللوجو المخزن أو الافتراضي مباشرة لتجنب الوميض
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
   const [appLogo, setAppLogo] = useState(() => {
     return localStorage.getItem('vivo_live_fixed_logo') || PERMANENT_LOGO_URL;
   });
 
   const t = translations[language];
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') setDeferredPrompt(null);
+  };
 
   useEffect(() => {
     document.title = appName;
@@ -288,7 +304,6 @@ export default function App() {
   const handleRoomJoin = (room: Room) => {
     if (room.isLocked && room.hostId !== user?.id) {
        setPendingRoom(room);
-       setRoomPassword('');
        return;
     }
     joinRoomDirectly(room);
@@ -343,7 +358,7 @@ export default function App() {
     </div>
   );
 
-  if (!user) return <AuthScreen onAuth={(u) => { setUser(u); localStorage.setItem('voice_chat_user', JSON.stringify(u)); }} appLogo={appLogo} />;
+  if (!user) return <AuthScreen onAuth={(u) => { setUser(u); localStorage.setItem('voice_chat_user', JSON.stringify(u)); }} appLogo={appLogo} canInstall={!!deferredPrompt} onInstall={handleInstallClick} />;
 
   return (
     <div className={`h-[100dvh] w-full bg-[#0f172a] text-white relative md:max-w-md mx-auto shadow-2xl overflow-hidden flex flex-col font-cairo ${language === 'en' ? 'text-left' : 'text-right'}`}>
