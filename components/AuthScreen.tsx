@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Mail, Lock, User, Zap, LogIn, UserPlus } from 'lucide-react';
+import { Mail, Lock, User, Zap, LogIn, UserPlus, Download, ShieldCheck } from 'lucide-react';
 import { UserLevel, User as UserType } from '../types';
 import { auth, db } from '../services/firebase';
 import { 
@@ -18,9 +18,11 @@ import {
 interface AuthScreenProps {
   onAuth: (user: UserType) => void;
   appLogo?: string;
+  canInstall?: boolean;
+  onInstall?: () => void;
 }
 
-const AuthScreen: React.FC<AuthScreenProps> = ({ onAuth, appLogo }) => {
+const AuthScreen: React.FC<AuthScreenProps> = ({ onAuth, appLogo, canInstall, onInstall }) => {
   const [showSplash, setShowSplash] = useState(true);
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
@@ -102,6 +104,28 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuth, appLogo }) => {
           <h1 className="text-lg font-black text-white leading-none">فـيـفـو لايف</h1>
           <p className="text-slate-500 text-[8px] font-black mt-1 tracking-widest uppercase">VIVO LIVE OFFICIAL</p>
         </div>
+
+        {/* زر تثبيت التطبيق الرسمي الاحترافي */}
+        <AnimatePresence>
+          {canInstall && (
+            <motion.button
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: -20, opacity: 0 }}
+              onClick={onInstall}
+              className="w-full bg-gradient-to-r from-blue-600 to-indigo-700 p-3 rounded-2xl flex items-center justify-between border border-white/10 shadow-lg active:scale-95 transition-all mb-2"
+            >
+              <div className="flex items-center gap-3">
+                 <div className="bg-white/10 p-2 rounded-xl"><Download size={18} className="text-white" /></div>
+                 <div className="text-right">
+                    <p className="text-[10px] font-black text-white leading-tight">تثبيت التطبيق الرسمي</p>
+                    <p className="text-[8px] text-white/60">للحصول على كامل المميزات</p>
+                 </div>
+              </div>
+              <ShieldCheck size={20} className="text-emerald-400" />
+            </motion.button>
+          )}
+        </AnimatePresence>
 
         <div className="w-full bg-slate-900/60 backdrop-blur-2xl border border-white/5 rounded-[1.8rem] p-4 shadow-2xl shrink-0">
           <div className="flex bg-black/40 p-1 rounded-xl mb-4 border border-white/5">
