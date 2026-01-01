@@ -1,0 +1,8 @@
+{
+  "name": "فيفو لايف: Vivo Livess",
+  "description": "تطبيق دردشة صوتية اجتماعي مع غرف تفاعلية، هدايا، وإطارات مميزة.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}
